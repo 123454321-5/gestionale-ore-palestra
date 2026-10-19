@@ -1,0 +1,188 @@
+<title>Gestionale ore palestra</title>
+<style>
+/* Layout: una colonna, intestazione mese, riepilogo, elenco giorni con orari, storico mensile. */
+:root{--bg:#f7f6f2;--fg:#1d1d1b;--mut:#6e6d67;--line:#dedcd4;--card:#ffffff;--we:#efeee8;--acc:#2d5b4e;--warn:#8a5a12}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#161614;--fg:#ecebe6;--mut:#9b9a93;--line:#333330;--card:#1f1f1d;--we:#1b1b19;--acc:#7fb8a5;--warn:#e0b060;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#161614;--fg:#ecebe6;--mut:#9b9a93;--line:#333330;--card:#1f1f1d;--we:#1b1b19;--acc:#7fb8a5;--warn:#e0b060;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;padding-inline:16px;padding-block:12px;background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}
+h1{font-size:18px;font-weight:600;margin:0;text-align:center;flex:1}
+h2{font-size:15px;font-weight:600;margin:0 0 8px}
+button{font:inherit;color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px 14px;min-height:36px;cursor:pointer}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;min-width:0}
+.stat .l{font-size:12px;color:var(--mut)}
+.stat .v{font-size:22px;font-weight:600;font-variant-numeric:tabular-nums;margin-top:2px}
+.list{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.row{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:6px 8px;align-items:center;padding:8px 12px;border-top:1px solid var(--line)}
+.row:first-child{border-top:0}
+.row.we{background:var(--we)}
+.row.off .dn{color:var(--mut)}
+.row input[type=checkbox]{width:20px;height:20px;accent-color:var(--acc);margin:0}
+.dn{font-weight:500}
+.dd{font-size:12px;color:var(--mut)}
+.pay{text-align:right;font-variant-numeric:tabular-nums;font-weight:500;min-width:84px}
+.det{grid-column:2 / -1;display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;font-size:13px;color:var(--mut);min-width:0}
+.det label{display:flex;align-items:center;gap:4px;min-width:0}
+.det input{height:32px;font:inherit;font-size:14px;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:0 6px;min-width:0}
+.det input[type=time]{width:100px}
+.det input[type=number]{width:72px}
+.det input[readonly]{opacity:.7}
+.hist{margin-top:20px}
+.hrow{display:flex;justify-content:space-between;gap:8px;padding:10px 12px;border-top:1px solid var(--line);font-variant-numeric:tabular-nums}
+.hrow:first-child{border-top:0}
+.note{font-size:13px;color:var(--mut);margin:10px 0 0}
+#msg{font-size:13px;color:var(--warn);margin:8px 0 0;min-height:1em}
+</style>
+
+<header>
+  <button id="prev" aria-label="Mese precedente">‹</button>
+  <h1 id="mt"></h1>
+  <button id="next" aria-label="Mese successivo">›</button>
+</header>
+
+<div class="stats">
+  <div class="stat"><div class="l">Ore del mese</div><div class="v" id="oo">0</div></div>
+  <div class="stat"><div class="l">Stipendio del mese</div><div class="v" id="ss">0,00 €</div></div>
+</div>
+
+<div class="list" id="rows"></div>
+<p class="note">6 € all'ora. La domenica 30 € a giornata, a prescindere dalle ore. Se inserisci dalle e alle, le ore si calcolano da sole; altrimenti le scrivi a mano.</p>
+<p id="msg" role="status"></p>
+
+<section class="hist">
+  <h2>Riepilogo mensile</h2>
+  <div class="list" id="hist"></div>
+</section>
+
+<script>
+(function(){
+var RATE=6, SUN_PAY=30;
+var NM=['Dom','Lun','Mar','Mer','Gio','Ven','Sab'];
+var MN=['gennaio','febbraio','marzo','aprile','maggio','giugno','luglio','agosto','settembre','ottobre','novembre','dicembre'];
+var cur=new Date(2026,9,1);
+var data={};
+var db=null;
+var queue={};
+
+function pad(n){return String(n).padStart(2,'0');}
+function keyOf(y,m,d){return y+'-'+pad(m+1)+'-'+pad(d);}
+function defH(dow){return dow===6?8:4;}
+function entry(k,dow){return data[k]||{flag:false,hours:defH(dow),start:'',end:''};}
+function toMin(t){var p=t.split(':');return (+p[0])*60+(+p[1]);}
+function hasTimes(e){return !!(e.start&&e.end);}
+function hoursOf(e){
+  if(hasTimes(e)){
+    var d=toMin(e.end)-toMin(e.start);
+    return d>0?d/60:0;
+  }
+  return Number(e.hours)||0;
+}
+function payOf(e,dow){
+  if(!e.flag) return 0;
+  if(dow===0) return SUN_PAY;
+  return hoursOf(e)*RATE;
+}
+function fmtH(h){return String(Math.round(h*100)/100).replace('.',',');}
+function eur(n){return n.toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2})+' €';}
+function setMsg(t){document.getElementById('msg').textContent=t;}
+
+function save(k,e){
+  data[k]=e;
+  render();
+  if(!db){
+    try{ localStorage.setItem('gestionale-ore-v1', JSON.stringify(data)); setMsg(''); }
+    catch(err){ setMsg('Impossibile salvare su questo dispositivo.'); }
+    return;
+  }
+  queue[k]=(queue[k]||Promise.resolve()).then(function(){
+    return db.doc('giorni/'+k).set(e);
+  }).then(function(){ setMsg(''); }).catch(function(){
+    setMsg('Salvataggio non riuscito. Riprova.');
+  });
+}
+
+function render(){
+  var y=cur.getFullYear(), m=cur.getMonth();
+  document.getElementById('mt').textContent=MN[m].charAt(0).toUpperCase()+MN[m].slice(1)+' '+y;
+  var n=new Date(y,m+1,0).getDate(), oo=0, ss=0, html='';
+  for(var d=1;d<=n;d++){
+    var dow=new Date(y,m,d).getDay(), k=keyOf(y,m,d), e=entry(k,dow), p=payOf(e,dow);
+    var h=hoursOf(e), timed=hasTimes(e);
+    if(e.flag){ oo+=h; ss+=p; }
+    html+='<div class="row'+(dow===0||dow===6?' we':'')+(e.flag?'':' off')+'" data-k="'+k+'" data-dow="'+dow+'">'
+      +'<input type="checkbox" class="fl" aria-label="Giorno lavorativo"'+(e.flag?' checked':'')+'>'
+      +'<div><div class="dn">'+NM[dow]+' '+d+'</div><div class="dd">'+MN[m].slice(0,3)+' '+y+'</div></div>'
+      +'<div class="pay">'+(e.flag?eur(p):'')+'</div>'
+      +'<div class="det">'
+      +'<label>Dalle <input type="time" class="st" value="'+(e.start||'')+'" aria-label="Ora di inizio"></label>'
+      +'<label>alle <input type="time" class="en" value="'+(e.end||'')+'" aria-label="Ora di fine"></label>'
+      +'<label>Ore <input type="number" class="hr" min="0" step="0.25" value="'+(Math.round(h*100)/100)+'"'+(timed?' readonly':'')+' aria-label="Ore"></label>'
+      +'</div>'
+      +'</div>';
+  }
+  document.getElementById('rows').innerHTML=html;
+  document.getElementById('oo').textContent=fmtH(oo);
+  document.getElementById('ss').textContent=eur(ss);
+  renderHist();
+}
+
+function renderHist(){
+  var agg={};
+  Object.keys(data).forEach(function(k){
+    var e=data[k];
+    if(!e || !e.flag) return;
+    var p=k.split('-'), y=+p[0], m=+p[1]-1, d=+p[2], dow=new Date(y,m,d).getDay();
+    var mk=p[0]+'-'+p[1];
+    agg[mk]=agg[mk]||{h:0,s:0,g:0,y:y,m:m};
+    agg[mk].g++;
+    agg[mk].h+=hoursOf(e);
+    agg[mk].s+=payOf(e,dow);
+  });
+  var keys=Object.keys(agg).sort().reverse();
+  document.getElementById('hist').innerHTML = keys.length
+    ? keys.map(function(mk){
+        var a=agg[mk];
+        return '<div class="hrow"><span>'+MN[a.m].charAt(0).toUpperCase()+MN[a.m].slice(1)+' '+a.y+' · '+a.g+' giorni</span><span>'+fmtH(a.h)+' h · '+eur(a.s)+'</span></div>';
+      }).join('')
+    : '<div class="hrow"><span>Nessun giorno registrato.</span></div>';
+}
+
+document.getElementById('rows').addEventListener('change',function(ev){
+  var row=ev.target.closest('.row');
+  if(!row) return;
+  var k=row.getAttribute('data-k'), dow=+row.getAttribute('data-dow');
+  var e=entry(k,dow), nx={flag:!!e.flag,hours:e.hours,start:e.start||'',end:e.end||''};
+  var t=ev.target;
+  if(t.classList.contains('fl')) nx.flag=t.checked;
+  else if(t.classList.contains('st')) nx.start=t.value;
+  else if(t.classList.contains('en')) nx.end=t.value;
+  else if(t.classList.contains('hr')){
+    var v=parseFloat(t.value);
+    nx.hours=(isNaN(v)||v<0)?0:v;
+  } else return;
+  if(hasTimes(nx)) nx.hours=hoursOf(nx);
+  save(k,nx);
+});
+
+document.getElementById('prev').onclick=function(){cur=new Date(cur.getFullYear(),cur.getMonth()-1,1);render();};
+document.getElementById('next').onclick=function(){cur=new Date(cur.getFullYear(),cur.getMonth()+1,1);render();};
+
+try{ data=JSON.parse(localStorage.getItem('gestionale-ore-v1')||'{}')||{}; }catch(err){ data={}; }
+render();
+
+(async function(){
+  try{
+    db = (window.claude && window.claude.use) ? await window.claude.use('db') : null;
+  }catch(err){ db=null; }
+  if(!db){ setMsg('Versione locale: i dati restano in questo browser e questo dispositivo.'); return; }
+  db.collection('giorni').onSnapshot(function(snap){
+    var nd={};
+    snap.docs.forEach(function(d){ if(d.exists) nd[d.id]=d.data(); });
+    data=nd;
+    render();
+  }, function(){ setMsg('Impossibile caricare i dati. Ricarica la pagina.'); });
+})();
+})();
+</script>
